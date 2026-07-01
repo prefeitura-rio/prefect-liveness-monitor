@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from main import main
-from monitor.controller import MonitorFatalError
+from monitor.controller import MaxFailuresError
 from tests.helpers import make_config, make_stream
 
 
@@ -12,7 +12,7 @@ class TestMain:
         """main() catches MonitorFatalError from the controller and exits with code 1."""
 
         async def raise_fatal(*_: object) -> None:
-            raise MonitorFatalError("test fatal error")
+            raise MaxFailuresError
 
         monkeypatch.setattr("main.Config", MagicMock(return_value=make_config()))
         monkeypatch.setattr("main.make_session", MagicMock(return_value=AsyncMock()))

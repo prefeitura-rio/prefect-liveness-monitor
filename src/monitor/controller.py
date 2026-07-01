@@ -17,6 +17,27 @@ class MonitorFatalError(Exception):
     """
 
 
+class MaxFailuresError(MonitorFatalError):
+    """Too many consecutive (or cumulative) error lines detected."""
+
+    def __init__(self) -> None:
+        super().__init__("max failures reached")
+
+
+class SilenceTimeoutError(MonitorFatalError):
+    """No log line arrived within the configured silence window."""
+
+    def __init__(self, window: int) -> None:
+        super().__init__(f"silence timeout exceeded ({window}s)")
+
+
+class StreamEndedError(MonitorFatalError):
+    """The log stream was exhausted unexpectedly."""
+
+    def __init__(self) -> None:
+        super().__init__("stream ended unexpectedly")
+
+
 class Strategy(Protocol):
     """Contract for per-iteration behaviour inside the monitoring loop."""
 
@@ -47,7 +68,7 @@ class StartupStrategy:
         logger.warning("error during grace ({}/{})", self.fail_count, self.config.max_failures)
 
         if self.fail_count >= self.config.max_failures:
-            raise MonitorFatalError("max failures reached during startup grace")
+            raise MaxFailuresError
 
     async def on_timeout(self) -> None:
         pass
@@ -79,13 +100,13 @@ class ControlStrategy:
         )
 
         if self.fail_count >= self.config.max_failures:
-            raise MonitorFatalError("max failures reached")
+            raise MaxFailuresError
 
     async def on_timeout(self) -> None:
-        raise MonitorFatalError(f"silence timeout exceeded ({self.config.silence_window}s)")
+        raise SilenceTimeoutError(self.config.silence_window)
 
     async def on_stream_end(self) -> None:
-        raise MonitorFatalError("stream ended unexpectedly")
+        raise StreamEndedError
 
 
 @dataclass
