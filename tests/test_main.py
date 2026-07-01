@@ -4,7 +4,7 @@ import pytest
 
 from main import main
 from monitor.controller import MaxFailuresError
-from tests.helpers import make_config, make_stream
+from tests.helpers import make_config
 
 
 class TestMain:
@@ -16,7 +16,6 @@ class TestMain:
 
         monkeypatch.setattr("main.Config", MagicMock(return_value=make_config()))
         monkeypatch.setattr("main.make_session", MagicMock(return_value=AsyncMock()))
-        monkeypatch.setattr("main.stream_logs", MagicMock(return_value=make_stream()))
         monkeypatch.setattr("monitor.controller.Controller.run", raise_fatal)
 
         with pytest.raises(SystemExit) as exc_info:

@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from monitor.producer import stream_logs
+from monitor.producer import LogStream
 from tests.helpers import FakeLogger, make_config, make_mock_client
 
 
@@ -12,8 +12,8 @@ def patch_read_token(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 async def collect(client: httpx.AsyncClient) -> list[str]:
-    """Drain stream_logs into a list for assertion."""
-    return [line async for line in stream_logs(client, make_config())]
+    """Drain LogStream into a list for assertion."""
+    return [line async for line in LogStream(client, make_config()).stream()]
 
 
 class TestStreamLogs:

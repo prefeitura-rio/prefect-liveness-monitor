@@ -6,7 +6,7 @@ from loguru import logger
 from monitor.config import Config
 from monitor.controller import Controller, ControlStrategy, MonitorFatalError, StartupStrategy
 from monitor.http import make_session
-from monitor.producer import stream_logs
+from monitor.producer import LogStream
 
 
 async def main() -> None:
@@ -14,7 +14,7 @@ async def main() -> None:
     config = Config()
 
     async with make_session(config) as session:
-        stream = stream_logs(session, config)
+        stream = LogStream(session, config).stream()
         logger.info("liveness monitor started")
 
         try:
