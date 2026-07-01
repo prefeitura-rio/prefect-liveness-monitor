@@ -12,6 +12,11 @@ class Config(BaseSettings):
     startup_grace_seconds: int = 90
     stream_read_timeout: int = 120
     k8s_api: str = "https://kubernetes.default.svc"
+    error_patterns: list[str] = [
+        "docket.strikelist - Error monitoring strikes",
+        "docket.strikelist - Connection error",
+        "docket.worker - Error sending worker heartbeat",
+    ]
 
     @computed_field
     @property

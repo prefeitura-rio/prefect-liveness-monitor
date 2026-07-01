@@ -7,9 +7,7 @@ from tests.helpers import make_config
 class TestConfig:
     def test_log_url_built_correctly(self) -> None:
         """log_url assembles k8s_api, pod_namespace, and pod_name into the K8s pod log endpoint."""
-        assert make_config().log_url == (
-            "https://k8s.test/api/v1/namespaces/test-ns/pods/test-pod/log"
-        )
+        assert make_config().log_url == ("https://k8s.test/api/v1/namespaces/test-ns/pods/test-pod/log")
 
     @pytest.mark.parametrize(
         ("cfg", "field", "expected"),
@@ -24,3 +22,9 @@ class TestConfig:
     def test_field_accepts_override(self, cfg: Config, field: str, expected: object) -> None:
         """Each Config field stores the exact value it was constructed with."""
         assert getattr(cfg, field) == expected
+
+    def test_error_patterns_parsed_from_json_env_var(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """error_patterns is deserialised from a JSON list env var at runtime."""
+        monkeypatch.setenv("ERROR_PATTERNS", '["pattern-a", "pattern-b"]')
+        config = Config()
+        assert config.error_patterns == ["pattern-a", "pattern-b"]

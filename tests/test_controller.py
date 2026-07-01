@@ -9,10 +9,9 @@ from monitor.controller import (
     StartupStrategy,
     StreamEndedError,
 )
-from monitor.detector import ERROR_PATTERNS
 from tests.helpers import blocking_stream, make_config, make_stream
 
-ERROR_LINE = f"12:00:00 | ERROR | {ERROR_PATTERNS[0]}"
+ERROR_LINE = "12:00:00 | ERROR | docket.strikelist - Error monitoring strikes"
 HEALTHY_LINE = "12:00:00 | INFO | prefect.server.scheduler - scheduled 0 runs"
 
 

@@ -29,6 +29,7 @@ def make_config(
     startup_grace_seconds: int = 5,
     stream_read_timeout: int = 120,
     k8s_api: str = "https://k8s.test",
+    error_patterns: list[str] | None = None,
 ) -> Config:
     """Build a Config with safe test defaults, overridable per test."""
     return Config(
@@ -39,6 +40,7 @@ def make_config(
         startup_grace_seconds=startup_grace_seconds,
         stream_read_timeout=stream_read_timeout,
         k8s_api=k8s_api,
+        error_patterns=error_patterns or ["docket.strikelist - Error monitoring strikes"],
     )
 
 

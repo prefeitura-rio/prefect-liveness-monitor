@@ -61,7 +61,7 @@ class StartupStrategy:
         self.timeout = float(self.config.startup_grace_seconds)
 
     async def on_line(self, line: str) -> None:
-        if not is_error_line(line):
+        if not is_error_line(line, self.config.error_patterns):
             return
 
         self.fail_count += 1
@@ -89,15 +89,13 @@ class ControlStrategy:
         self.timeout = float(self.config.silence_window)
 
     async def on_line(self, line: str) -> None:
-        if not is_error_line(line):
+        if not is_error_line(line, self.config.error_patterns):
             self.fail_count = 0
             return
 
         self.fail_count += 1
 
-        logger.warning(
-            "error detected ({}/{}): {}", self.fail_count, self.config.max_failures, line
-        )
+        logger.warning("error detected ({}/{}): {}", self.fail_count, self.config.max_failures, line)
 
         if self.fail_count >= self.config.max_failures:
             raise MaxFailuresError
