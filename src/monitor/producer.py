@@ -35,8 +35,10 @@ class LogStream:
         """Strip and dedup a raw line; return None if blank or already seen."""
         line = raw.strip()
         line_hash = hash(line)
+
         if not line or line_hash in self.seen:
             return None
+
         self.seen.add(line_hash)
         self.last_seen = datetime.now(UTC)
         return line
@@ -52,6 +54,7 @@ class LogStream:
             _ = resp.raise_for_status()
             async for raw in resp.aiter_lines():
                 line = self.next_line(raw)
+
                 if line is not None:
                     yield line
 
@@ -65,6 +68,7 @@ class LogStream:
                 if attempt == MAX_RECONNECT_ATTEMPTS - 1:
                     logger.error("max reconnect attempts reached, giving up: {}", exc)
                     return
+
                 backoff = min(float(BACKOFF_CAP), 0.1 * (2.0**attempt))
                 logger.warning(
                     "stream disconnected (attempt {}/{}), reconnecting in {:.1f}s",
@@ -72,4 +76,5 @@ class LogStream:
                     MAX_RECONNECT_ATTEMPTS,
                     backoff,
                 )
+
                 await asyncio.sleep(backoff)
