@@ -21,6 +21,7 @@ class Strategy(Protocol):
     """Contract for per-iteration behaviour inside the monitoring loop."""
 
     timeout: float
+    fail_count: int
 
     async def on_line(self, line: str) -> None: ...
     async def on_timeout(self) -> None: ...
@@ -41,8 +42,10 @@ class StartupStrategy:
     async def on_line(self, line: str) -> None:
         if not is_error_line(line):
             return
+
         self.fail_count += 1
         logger.warning("error during grace ({}/{})", self.fail_count, self.config.max_failures)
+
         if self.fail_count >= self.config.max_failures:
             raise MonitorFatalError("max failures reached during startup grace")
 
