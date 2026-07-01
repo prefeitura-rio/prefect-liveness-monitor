@@ -17,7 +17,7 @@ jobs:
           enable-cache: true
           cache-dependency-glob: uv.lock
       - name: Export pinned requirements
-        run: uv export --frozen --no-dev --format requirements-txt -o /tmp/requirements.txt
+        run: uv export --frozen --no-dev --format requirements-txt --no-emit-project -o /tmp/requirements.txt
       - uses: pypa/gh-action-pip-audit@v1.1.0
         with:
           inputs: /tmp/requirements.txt
