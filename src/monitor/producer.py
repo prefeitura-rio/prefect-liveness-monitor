@@ -14,12 +14,7 @@ MAX_RECONNECT_ATTEMPTS: int = 10
 
 
 async def stream_logs(session: AsyncClient, config: Config) -> AsyncGenerator[str]:
-    """Yield deduplicated log lines from the K8s log stream, reconnecting on failure.
-
-    Opens a follow=true HTTP stream against the Kubernetes log API.
-    A persistent hash set deduplicates lines replayed across the sinceTime
-    reconnect boundary. Stops after MAX_RECONNECT_ATTEMPTS consecutive failures.
-    """
+    """Yield deduplicated log lines from the K8s log stream, reconnecting on failure."""
     seen: set[int] = set()
     last_seen = datetime.now(UTC)
 
@@ -28,7 +23,7 @@ async def stream_logs(session: AsyncClient, config: Config) -> AsyncGenerator[st
             params = {
                 "container": CONTAINER,
                 "follow": "true",
-                "sinceTime": last_seen.strftime("%Y-%m-%dT%H:%M:%SZ"),  # last_seen is always UTC
+                "sinceTime": last_seen.strftime("%Y-%m-%dT%H:%M:%SZ"),
             }
             async with session.stream(
                 "GET",
@@ -38,10 +33,13 @@ async def stream_logs(session: AsyncClient, config: Config) -> AsyncGenerator[st
             ) as resp:
                 _ = resp.raise_for_status()
                 async for raw in resp.aiter_lines():
-                    # set.add() returns None; not None is True — side-effect: records h in seen
-                    if (line := raw.strip()) and (h := hash(line)) not in seen and not seen.add(h):
-                        last_seen = datetime.now(UTC)
-                        yield line
+                    line = raw.strip()
+                    line_hash = hash(line)
+                    if not line or line_hash in seen:
+                        continue
+                    seen.add(line_hash)
+                    last_seen = datetime.now(UTC)
+                    yield line
         except Exception as exc:
             if attempt == MAX_RECONNECT_ATTEMPTS - 1:
                 logger.error("max reconnect attempts reached, giving up: {}", exc)
