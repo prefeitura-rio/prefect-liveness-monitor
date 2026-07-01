@@ -1,94 +1,83 @@
-from datetime import UTC, datetime, timedelta
-from queue import Queue
-
 import pytest
 
 from monitor.config import Config
 from monitor.controller import MonitorFatalError, controller_loop, startup_grace
 from monitor.detector import ERROR_PATTERNS
-from tests.helpers import make_config
+from tests.helpers import blocking_stream, make_config, make_stream
 
 ERROR_LINE = f"12:00:00 | ERROR | {ERROR_PATTERNS[0]}"
 HEALTHY_LINE = "12:00:00 | INFO | prefect.server.scheduler - scheduled 0 runs"
 
 
-def make_queue(*lines: str | None) -> Queue[str | None]:
-    """Return a Queue pre-loaded with *lines*."""
-    q: Queue[str | None] = Queue()
-    for line in lines:
-        q.put(line)
-    return q
-
-
 class TestStartupGrace:
-    def test_uses_config_grace_seconds_when_no_deadline_given(self) -> None:
-        """Without a deadline argument, startup_grace uses config.startup_grace_seconds instead."""
-        startup_grace(Queue(), make_config(startup_grace_seconds=0))
+    async def test_returns_normally_when_grace_expires(self) -> None:
+        """startup_grace returns without error when the timeout fires with no lines."""
+        await startup_grace(blocking_stream(), make_config(startup_grace_seconds=0))
 
-    def test_returns_normally_with_past_deadline(self) -> None:
-        """startup_grace returns immediately when the grace deadline has already elapsed."""
-        startup_grace(Queue(), make_config(), datetime.now(UTC) - timedelta(seconds=1))
+    async def test_ignores_silence_within_deadline(self) -> None:
+        """An empty stream does not raise — silence is tolerated during grace."""
+        await startup_grace(make_stream(), make_config(startup_grace_seconds=60))
 
-    def test_ignores_silence_within_deadline(self) -> None:
-        """An empty queue does not raise while the grace deadline is still in the future."""
-        startup_grace(Queue(), make_config(), datetime.now(UTC) + timedelta(milliseconds=50))
-
-    def test_cumulative_fail_count_not_reset_by_healthy_line(self) -> None:
+    async def test_cumulative_fail_count_not_reset_by_healthy_line(self) -> None:
         """Healthy lines do not reset the error counter during grace; counting is cumulative."""
-        far = datetime.now(UTC) + timedelta(hours=1)
         with pytest.raises(MonitorFatalError, match="max failures"):
-            startup_grace(
-                make_queue(ERROR_LINE, HEALTHY_LINE, ERROR_LINE, None),
-                make_config(max_failures=2),
-                far,
+            await startup_grace(
+                make_stream(ERROR_LINE, HEALTHY_LINE, ERROR_LINE),
+                make_config(max_failures=2, startup_grace_seconds=60),
             )
 
     @pytest.mark.parametrize(
-        ("queue_lines", "cfg", "match"),
+        ("lines", "cfg", "match"),
         [
-            ([None], make_config(), "stream ended"),
-            ([ERROR_LINE, ERROR_LINE], make_config(max_failures=2), "max failures"),
+            (
+                [ERROR_LINE, ERROR_LINE],
+                make_config(max_failures=2, startup_grace_seconds=60),
+                "max failures",
+            ),
         ],
     )
-    def test_raises_on_fatal_input(
+    async def test_raises_on_max_failures(
         self,
-        queue_lines: list[str | None],
+        lines: list[str],
         cfg: Config,
         match: str,
     ) -> None:
-        """startup_grace raises MonitorFatalError on stream-end sentinel or repeated errors."""
-        far = datetime.now(UTC) + timedelta(hours=1)
+        """startup_grace raises MonitorFatalError when cumulative errors reach max_failures."""
         with pytest.raises(MonitorFatalError, match=match):
-            startup_grace(make_queue(*queue_lines), cfg, far)
+            await startup_grace(make_stream(*lines), cfg)  # type: ignore[arg-type]
 
 
 class TestControllerLoop:
-    @pytest.mark.parametrize(
-        ("queue_lines", "cfg", "match"),
-        [
-            ([], make_config(silence_window=0), "silence timeout"),
-            ([None], make_config(), "stream ended"),
-            ([ERROR_LINE] * 3, make_config(max_failures=3), "max failures"),
-        ],
-    )
-    def test_raises_on_fatal_condition(
-        self,
-        queue_lines: list[str | None],
-        cfg: Config,
-        match: str,
-    ) -> None:
-        """Raises MonitorFatalError on silence timeout, sentinel, or error-count overflow."""
-        with pytest.raises(MonitorFatalError, match=match):
-            controller_loop(make_queue(*queue_lines), cfg)
+    async def test_raises_on_silence_timeout(self) -> None:
+        """controller_loop raises when no line arrives within silence_window seconds."""
+        with pytest.raises(MonitorFatalError, match="silence timeout"):
+            await controller_loop(blocking_stream(), make_config(silence_window=0))
 
-    def test_resets_fail_count_on_healthy_line(self) -> None:
-        """A healthy line resets the counter; sub-limit error bursts never trigger max_failures."""
-        q = make_queue(ERROR_LINE, ERROR_LINE, HEALTHY_LINE, ERROR_LINE, ERROR_LINE, None)
+    async def test_raises_when_stream_ends(self) -> None:
+        """controller_loop raises when the async generator is exhausted."""
         with pytest.raises(MonitorFatalError, match="stream ended"):
-            controller_loop(q, make_config(max_failures=3))
+            await controller_loop(make_stream(), make_config())
 
-    def test_healthy_lines_do_not_raise(self) -> None:
-        """Healthy lines never increment the failure counter; only the sentinel ends the loop."""
-        q = make_queue(*([HEALTHY_LINE] * 10), None)
+    async def test_raises_on_max_failures(self) -> None:
+        """controller_loop raises after max_failures consecutive error lines."""
+        with pytest.raises(MonitorFatalError, match="max failures"):
+            await controller_loop(
+                make_stream(*([ERROR_LINE] * 3)),
+                make_config(max_failures=3),
+            )
+
+    async def test_resets_fail_count_on_healthy_line(self) -> None:
+        """A healthy line resets the counter; sub-limit bursts never trigger max_failures."""
         with pytest.raises(MonitorFatalError, match="stream ended"):
-            controller_loop(q, make_config(max_failures=3))
+            await controller_loop(
+                make_stream(ERROR_LINE, ERROR_LINE, HEALTHY_LINE, ERROR_LINE, ERROR_LINE),
+                make_config(max_failures=3),
+            )
+
+    async def test_healthy_lines_do_not_raise(self) -> None:
+        """Healthy lines never increment the failure counter."""
+        with pytest.raises(MonitorFatalError, match="stream ended"):
+            await controller_loop(
+                make_stream(*([HEALTHY_LINE] * 10)),
+                make_config(max_failures=3),
+            )

@@ -1,12 +1,8 @@
-from datetime import UTC, datetime
-from queue import Queue
-
 import httpx
 import pytest
-from stamina.instrumentation import RetryDetails
 
-from monitor.producer import connect_and_stream, log_retry, stream_producer
-from tests.helpers import FakeLogger, drain_queue, make_config, make_mock_client
+from monitor.producer import stream_logs
+from tests.helpers import FakeLogger, make_config, make_mock_client
 
 
 @pytest.fixture(autouse=True)
@@ -15,86 +11,74 @@ def patch_read_token(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("monitor.producer.read_token", lambda: "tok")
 
 
-class TestLogRetry:
-    def test_logs_warning_with_attempt_and_wait(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """log_retry emits a warning with attempt number, max attempts, and wait duration."""
-        fake_logger = FakeLogger()
-        monkeypatch.setattr("monitor.producer.logger", fake_logger)
-        details = RetryDetails(
-            name="test",
-            args=(),
-            kwargs={},
-            retry_num=2,
-            wait_for=1.5,
-            waited_so_far=1.5,
-            caused_by=ValueError("oops"),
-        )
-        log_retry(details)
-        assert len(fake_logger.warnings) == 1
+async def collect(client: httpx.AsyncClient) -> list[str]:
+    """Drain stream_logs into a list for assertion."""
+    return [line async for line in stream_logs(client, make_config())]
 
 
-class TestConnectAndStream:
-    def test_returns_original_last_seen_when_no_lines(self) -> None:
-        """When the response stream is empty, last_seen is returned unchanged."""
-        last_seen = datetime.now(UTC)
-        result = connect_and_stream(
-            make_mock_client([[]]), make_config(), set(), Queue(), last_seen
-        )
-        assert result is last_seen
-
-    def test_returns_updated_timestamp_when_lines_drained(self) -> None:
-        """When lines are drained, a newer timestamp is returned and lines appear in the queue."""
-        last_seen = datetime(2000, 1, 1, tzinfo=UTC)
-        out: Queue[str | None] = Queue()
-        result = connect_and_stream(
-            make_mock_client([["line-A"]]), make_config(), set(), out, last_seen
-        )
-        assert result > last_seen
-        assert out.get_nowait() == "line-A"
-
-    def test_propagates_connection_errors(self) -> None:
-        """ConnectError from the underlying HTTP client propagates out of connect_and_stream."""
-        with pytest.raises(httpx.ConnectError):
-            _ = connect_and_stream(
-                make_mock_client([]), make_config(), set(), Queue(), datetime.now(UTC)
-            )
-
-
-class TestStreamProducer:
+class TestStreamLogs:
     @pytest.mark.parametrize(
         ("batches", "max_attempts", "expected"),
         [
-            ([["line-A", "line-B", "line-C"]], 1, ["line-A", "line-B", "line-C", None]),
-            ([["line-A", "", "  ", "line-B"]], 1, ["line-A", "line-B", None]),
+            ([["line-A", "line-B", "line-C"]], 1, ["line-A", "line-B", "line-C"]),
+            ([["line-A", "", "  ", "line-B"]], 1, ["line-A", "line-B"]),
             (
                 [["line-A", "line-B", "line-C"], ["line-C", "line-D"]],
                 2,
-                ["line-A", "line-B", "line-C", "line-D", None],
+                ["line-A", "line-B", "line-C", "line-D"],
             ),
-            ([["line-A"], ["line-B"]], 2, ["line-A", "line-B", None]),
-            ([], 3, [None]),
+            ([["line-A"], ["line-B"]], 2, ["line-A", "line-B"]),
+            ([], 3, []),
         ],
     )
-    def test_stream_output(
+    async def test_stream_output(
         self,
         batches: list[list[str]],
         max_attempts: int,
-        expected: list[str | None],
+        expected: list[str],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """stream_producer forwards lines, drops blanks, deduplicates, and emits None sentinel."""
+        """stream_logs forwards lines, drops blanks, deduplicates across reconnects."""
         monkeypatch.setattr("monitor.producer.MAX_RECONNECT_ATTEMPTS", max_attempts)
-        out: Queue[str | None] = Queue()
-        stream_producer(make_mock_client(batches), make_config(), out)
-        assert drain_queue(out) == expected
+        assert await collect(make_mock_client(batches)) == expected
 
-    def test_logs_last_error_on_exhaustion(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """After all reconnect attempts fail, the last exception is logged as a warning."""
+    async def test_logs_warning_on_reconnect(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A warning is emitted for each ConnectError that is not the final attempt."""
+        monkeypatch.setattr("monitor.producer.MAX_RECONNECT_ATTEMPTS", 2)
+        fake_logger = FakeLogger()
+        monkeypatch.setattr("monitor.producer.logger", fake_logger)
+
+        # Empty mock → ConnectError on every call; attempt 0 warns, attempt 1 errors.
+        _ = await collect(make_mock_client([]))
+
+        assert len(fake_logger.warnings) == 1
+        assert len(fake_logger.errors) == 1
+
+    async def test_logs_error_on_exhaustion(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An error is logged and no warning when the only attempt fails."""
         monkeypatch.setattr("monitor.producer.MAX_RECONNECT_ATTEMPTS", 1)
         fake_logger = FakeLogger()
         monkeypatch.setattr("monitor.producer.logger", fake_logger)
 
-        stream_producer(make_mock_client([]), make_config(), Queue())
+        _ = await collect(make_mock_client([]))
 
-        assert len(fake_logger.warnings) == 1
-        assert isinstance(fake_logger.warnings[0][1], httpx.ConnectError)
+        assert len(fake_logger.errors) == 1
+        assert len(fake_logger.warnings) == 0
+
+    async def test_intra_batch_dedup(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Duplicate lines within a single batch are forwarded only once."""
+        monkeypatch.setattr("monitor.producer.MAX_RECONNECT_ATTEMPTS", 1)
+        result = await collect(make_mock_client([["x", "x", "x"]]))
+        assert result == ["x"]
+
+    async def test_cross_batch_dedup(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Lines seen in a previous batch are not forwarded again on reconnect."""
+        monkeypatch.setattr("monitor.producer.MAX_RECONNECT_ATTEMPTS", 2)
+        result = await collect(make_mock_client([["line-A"], ["line-A", "line-B"]]))
+        assert result == ["line-A", "line-B"]
+
+    async def test_blank_lines_dropped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Empty and whitespace-only lines are never forwarded."""
+        monkeypatch.setattr("monitor.producer.MAX_RECONNECT_ATTEMPTS", 1)
+        result = await collect(make_mock_client([["", "  ", "\t", "real"]]))
+        assert result == ["real"]

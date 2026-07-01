@@ -6,7 +6,6 @@ dependencies = [
     "httpx>=0.28",
     "loguru>=0.7",
     "pydantic-settings>=2",
-    "stamina>=24.2",
 ]
 
 [build-system]
@@ -20,6 +19,7 @@ module-name = "monitor"
 dev = [
     "hypothesis>=6",
     "pytest>=8",
+    "pytest-asyncio>=0.25",
     "pytest-cov>=6",
     "pytest-mock>=3",
 ]
@@ -27,6 +27,7 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+asyncio_mode = "auto"
 
 [tool.coverage.run]
 source = ["monitor", "main"]

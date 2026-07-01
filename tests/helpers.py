@@ -1,26 +1,23 @@
 """Non-fixture test helpers shared across all test modules."""
 
-from queue import Queue
+import asyncio
+from collections.abc import AsyncGenerator
 
 import httpx
 
 from monitor.config import Config
 
 
-def queue_to_list(out: Queue[str | None]) -> list[str | None]:
-    """Return all items currently in *out* without consuming them via the sentinel."""
-    return [out.get_nowait() for _ in range(out.qsize())]
+async def make_stream(*lines: str) -> AsyncGenerator[str]:
+    """Async generator yielding *lines* — stand-in for stream_logs in controller tests."""
+    for line in lines:
+        yield line
 
 
-def drain_queue(out: Queue[str | None]) -> list[str | None]:
-    """Consume *out* into a list, stopping after the None sentinel."""
-    results: list[str | None] = []
-    while True:
-        item = out.get_nowait()
-        results.append(item)
-        if item is None:
-            break
-    return results
+async def blocking_stream() -> AsyncGenerator[str]:
+    """Async generator that blocks forever — triggers silence timeout in controller tests."""
+    _ = await asyncio.Event().wait()
+    yield ""  # unreachable
 
 
 def make_config(
@@ -46,20 +43,23 @@ def make_config(
 
 
 class FakeLogger:
-    """Typed stand-in for loguru.logger, capturing warning calls for assertions."""
+    """Typed stand-in for loguru.logger, capturing warning and error calls for assertions."""
 
     def __init__(self) -> None:
         self.warnings: list[tuple[object, ...]] = []
+        self.errors: list[tuple[object, ...]] = []
 
     def warning(self, msg: str, *args: object) -> None:
+        """Capture a warning message."""
         self.warnings.append((msg, *args))
 
-    def error(self, _msg: str, *_args: object) -> None:
-        pass
+    def error(self, msg: str, *args: object) -> None:
+        """Capture an error message."""
+        self.errors.append((msg, *args))
 
 
-def make_mock_client(batches: list[list[str]]) -> httpx.Client:
-    """Return a real httpx.Client backed by MockTransport serving *batches* sequentially.
+def make_mock_client(batches: list[list[str]]) -> httpx.AsyncClient:
+    """Return an AsyncClient backed by MockTransport serving *batches* sequentially.
 
     Each call to client.stream() consumes the next batch. After all batches are
     exhausted every subsequent call raises httpx.ConnectError.
@@ -73,4 +73,4 @@ def make_mock_client(batches: list[list[str]]) -> httpx.Client:
         except StopIteration:
             raise httpx.ConnectError("no more batches") from None
 
-    return httpx.Client(transport=httpx.MockTransport(handler))
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))

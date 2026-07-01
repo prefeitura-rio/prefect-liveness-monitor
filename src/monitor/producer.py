@@ -1,11 +1,9 @@
-from collections.abc import Iterable
+import asyncio
+from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
-from queue import Queue
 
-from httpx import Client
+from httpx import AsyncClient
 from loguru import logger
-from stamina import retry_context
-from stamina.instrumentation import RetryDetails, set_on_retry_hooks
 
 from .config import Config
 from .http import read_token
@@ -15,88 +13,44 @@ BACKOFF_CAP: int = 30
 MAX_RECONNECT_ATTEMPTS: int = 10
 
 
-class StreamClosed(Exception):
-    """Raised after a clean stream end to signal stamina to reconnect."""
+async def stream_logs(session: AsyncClient, config: Config) -> AsyncGenerator[str]:
+    """Yield deduplicated log lines from the K8s log stream, reconnecting on failure.
 
-
-def log_retry(details: RetryDetails) -> None:
-    """Log a warning via loguru whenever stamina schedules a retry."""
-    logger.warning(
-        "stream disconnected (attempt {}/{}), reconnecting in {:.1f}s",
-        details.retry_num,
-        MAX_RECONNECT_ATTEMPTS,
-        details.wait_for,
-    )
-
-
-def drain_lines(
-    lines: Iterable[str],
-    seen: set[int],
-    out: Queue[str | None],
-) -> datetime | None:
-    """Filter, deduplicate and emit log lines; return timestamp of last new line."""
-    new_lines = [
-        line
-        for raw in lines
-        # set.add() returns None; not None is True — side-effect: records h in seen
-        if (line := raw.strip()) and (h := hash(line)) not in seen and not seen.add(h)
-    ]
-    for line in new_lines:
-        out.put(line)
-    return datetime.now(UTC) if new_lines else None
-
-
-def connect_and_stream(
-    session: Client,
-    config: Config,
-    seen: set[int],
-    out: Queue[str | None],
-    last_seen: datetime,
-) -> datetime:
-    """Open one log stream connection, drain lines, and return updated last_seen."""
-    params = {
-        "container": CONTAINER,
-        "follow": "true",
-        "sinceTime": last_seen.strftime("%Y-%m-%dT%H:%M:%SZ"),  # last_seen is always UTC
-    }
-    with session.stream(
-        "GET",
-        config.log_url,
-        headers={"Authorization": f"Bearer {read_token()}"},
-        params=params,
-    ) as resp:
-        _ = resp.raise_for_status()
-        return drain_lines(resp.iter_lines(), seen, out) or last_seen
-
-
-def stream_producer(
-    session: Client,
-    config: Config,
-    out: Queue[str | None],
-) -> None:
-    """Push log lines from the K8s streaming log API into *out*.
-
-    Opens a follow=true connection and forwards each non-blank line.
+    Opens a follow=true HTTP stream against the Kubernetes log API.
     A persistent hash set deduplicates lines replayed across the sinceTime
-    reconnect boundary. Puts None as a terminal sentinel after exhausting
-    MAX_RECONNECT_ATTEMPTS consecutive failures.
+    reconnect boundary. Stops after MAX_RECONNECT_ATTEMPTS consecutive failures.
     """
-    set_on_retry_hooks([log_retry])
-    seen_hashes: set[int] = set()
-    last_seen: datetime = datetime.now(UTC)
+    seen: set[int] = set()
+    last_seen = datetime.now(UTC)
 
-    try:
-        for attempt in retry_context(
-            on=Exception,
-            attempts=MAX_RECONNECT_ATTEMPTS,
-            wait_max=BACKOFF_CAP,
-        ):
-            with attempt:
-                last_seen = connect_and_stream(session, config, seen_hashes, out, last_seen)
-                raise StreamClosed()
-
-    except Exception as exc:
-        logger.warning("last error before giving up: {}", exc)
-
-    logger.error("max reconnect attempts reached, giving up")
-    out.put(None)
+    for attempt in range(MAX_RECONNECT_ATTEMPTS):
+        try:
+            params = {
+                "container": CONTAINER,
+                "follow": "true",
+                "sinceTime": last_seen.strftime("%Y-%m-%dT%H:%M:%SZ"),  # last_seen is always UTC
+            }
+            async with session.stream(
+                "GET",
+                config.log_url,
+                headers={"Authorization": f"Bearer {read_token()}"},
+                params=params,
+            ) as resp:
+                _ = resp.raise_for_status()
+                async for raw in resp.aiter_lines():
+                    # set.add() returns None; not None is True — side-effect: records h in seen
+                    if (line := raw.strip()) and (h := hash(line)) not in seen and not seen.add(h):
+                        last_seen = datetime.now(UTC)
+                        yield line
+        except Exception as exc:
+            if attempt == MAX_RECONNECT_ATTEMPTS - 1:
+                logger.error("max reconnect attempts reached, giving up: {}", exc)
+                return
+            backoff = min(float(BACKOFF_CAP), 0.1 * (2.0**attempt))
+            logger.warning(
+                "stream disconnected (attempt {}/{}), reconnecting in {:.1f}s",
+                attempt + 1,
+                MAX_RECONNECT_ATTEMPTS,
+                backoff,
+            )
+            await asyncio.sleep(backoff)

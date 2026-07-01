@@ -1,42 +1,29 @@
-from queue import Queue
+import asyncio
 from sys import exit
-from threading import Thread
 
 from loguru import logger
-from pydantic import ValidationError
 
 from monitor.config import Config
 from monitor.controller import MonitorFatalError, controller_loop, startup_grace
 from monitor.http import make_session
-from monitor.producer import stream_producer
+from monitor.producer import stream_logs
 
 
-def main() -> None:
-    try:
-        config = Config()  # pyright: ignore[reportCallIssue]  # fields injected from env vars
-    except ValidationError as exc:
-        logger.critical("invalid configuration:\n{}", exc)
-        exit(1)
+async def main() -> None:
+    """Entry point: stream K8s logs and restart the pod on fatal conditions."""
+    config = Config()
 
-    session = make_session(config)
-    log_queue: Queue[str | None] = Queue()
+    async with make_session(config) as session:
+        stream = stream_logs(session, config)
+        logger.info("liveness monitor started")
 
-    Thread(
-        target=stream_producer,
-        args=(session, config, log_queue),
-        daemon=True,
-        name="log-stream-producer",
-    ).start()
-
-    logger.info("liveness monitor started")
-
-    try:
-        startup_grace(log_queue, config)
-        controller_loop(log_queue, config)
-    except MonitorFatalError as exc:
-        logger.critical("{}", exc)
-        exit(1)
+        try:
+            await startup_grace(stream, config)
+            await controller_loop(stream, config)
+        except MonitorFatalError as exc:
+            logger.critical("{}", exc)
+            exit(1)
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

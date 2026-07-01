@@ -1,5 +1,5 @@
-from datetime import UTC, datetime, timedelta
-from queue import Empty, Queue
+import asyncio
+from collections.abc import AsyncGenerator
 from typing import NoReturn
 
 from loguru import logger
@@ -16,12 +16,11 @@ class MonitorFatalError(Exception):
     """
 
 
-def startup_grace(
-    queue: Queue[str | None],
+async def startup_grace(
+    stream: AsyncGenerator[str],
     config: Config,
-    deadline: datetime | None = None,
 ) -> None:
-    """Drain the queue for startup_grace_seconds, enforcing errors but not silence.
+    """Drain the stream for startup_grace_seconds, enforcing errors but not silence.
 
     The container may not emit logs immediately after boot. This grace period
     tolerates silence while still catching fatal error patterns.
@@ -30,61 +29,50 @@ def startup_grace(
     do not reset the failure counter. Any max_failures errors during the grace
     period — even non-consecutive — trigger a fatal restart.
     """
-
-    if deadline is None:
-        deadline = datetime.now(UTC) + timedelta(seconds=config.startup_grace_seconds)
-
     fail_count: int = 0
-
     logger.info("startup grace started ({} seconds)", config.startup_grace_seconds)
 
-    while (now := datetime.now(UTC)) < deadline:
-        remaining = (deadline - now).total_seconds()
-        try:
-            line = queue.get(timeout=max(remaining, 0.01))
-        except Empty:
-            continue
-
-        if line is None:
-            raise MonitorFatalError("stream ended during startup grace")
-
-        if is_error_line(line):
-            fail_count += 1
-            logger.warning("error during grace ({}/{})", fail_count, config.max_failures)
-            if fail_count >= config.max_failures:
-                raise MonitorFatalError("max failures reached during startup grace")
+    try:
+        async with asyncio.timeout(config.startup_grace_seconds):
+            async for line in stream:
+                if is_error_line(line):
+                    fail_count += 1
+                    logger.warning("error during grace ({}/{})", fail_count, config.max_failures)
+                    if fail_count >= config.max_failures:
+                        raise MonitorFatalError("max failures reached during startup grace")
+    except TimeoutError:
+        pass  # grace period expired normally — silence during startup is expected
 
     logger.info("startup grace complete")
 
 
-def controller_loop(
-    log_queue: Queue[str | None],
+async def controller_loop(
+    stream: AsyncGenerator[str],
     config: Config,
 ) -> NoReturn:
-    """React to each arriving log line; raise on silence or too many errors.
+    """React to each arriving log line; raise on silence or too many consecutive errors.
 
-    Blocks on the queue with a timeout of silence_window seconds. A queue
-    timeout means no line has arrived for that long — the container is hung.
+    Reschedules the silence deadline on every line received. A TimeoutError
+    means no line arrived for silence_window seconds — the container is hung.
     Error lines increment a counter that resets on any healthy line.
     """
     fail_count: int = 0
     logger.info("controller started")
 
-    while True:
-        try:
-            line = log_queue.get(timeout=float(config.silence_window))
-        except Empty:
-            raise MonitorFatalError(
-                f"silence timeout exceeded ({config.silence_window}s)"
-            ) from None
+    try:
+        async with asyncio.timeout(config.silence_window) as cm:
+            async for line in stream:
+                cm.reschedule(asyncio.get_running_loop().time() + config.silence_window)
+                if is_error_line(line):
+                    fail_count += 1
+                    logger.warning(
+                        "error detected ({}/{}): {}", fail_count, config.max_failures, line
+                    )
+                    if fail_count >= config.max_failures:
+                        raise MonitorFatalError("max failures reached")
+                else:
+                    fail_count = 0
+    except TimeoutError:
+        raise MonitorFatalError(f"silence timeout exceeded ({config.silence_window}s)") from None
 
-        if line is None:
-            raise MonitorFatalError("stream ended unexpectedly")
-
-        if is_error_line(line):
-            fail_count += 1
-            logger.warning("error detected ({}/{}): {}", fail_count, config.max_failures, line)
-            if fail_count >= config.max_failures:
-                raise MonitorFatalError("max failures reached")
-        else:
-            fail_count = 0
+    raise MonitorFatalError("stream ended unexpectedly")

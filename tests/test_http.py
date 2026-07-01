@@ -8,15 +8,15 @@ from tests.helpers import make_config
 
 
 class TestMakeSession:
-    def test_configures_read_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """make_session passes stream_read_timeout as the httpx read timeout."""
+    def test_returns_async_client(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """make_session returns an AsyncClient instance."""
         captured: list[Timeout] = []
 
-        class FakeClient:
+        class FakeAsyncClient:
             def __init__(self, verify: str, timeout: Timeout) -> None:
                 captured.append(timeout)
 
-        monkeypatch.setattr("monitor.http.Client", FakeClient)
+        monkeypatch.setattr("monitor.http.AsyncClient", FakeAsyncClient)
         _ = make_session(make_config(stream_read_timeout=60))
 
         assert captured[0].read == 60.0
