@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# devenv
+.devenv/
+devenv.lock
+.pre-commit-config.yaml

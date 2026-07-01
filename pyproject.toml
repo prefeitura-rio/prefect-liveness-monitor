@@ -1,0 +1,45 @@
+[project]
+name = "prefect-liveness-monitor"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = [
+    "httpx>=0.28",
+    "loguru>=0.7",
+    "pydantic-settings>=2",
+    "stamina>=24.2",
+]
+
+[build-system]
+requires = ["uv_build"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "monitor"
+
+[dependency-groups]
+dev = [
+    "hypothesis>=6",
+    "pytest>=8",
+    "pytest-cov>=6",
+    "pytest-mock>=3",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.coverage.run]
+source = ["monitor", "main"]
+
+[tool.basedpyright]
+pythonVersion = "3.14"
+venvPath = "."
+venv = ".venv"
+extraPaths = ["src", "."]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

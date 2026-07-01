@@ -1,0 +1,13 @@
+.venv/
+.devenv/
+.git/
+.gitignore
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+devenv.nix
+devenv.yaml
+devenv.lock
+tests/
+*.md
+LICENSE
