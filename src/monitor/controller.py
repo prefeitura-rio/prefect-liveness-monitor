@@ -68,15 +68,15 @@ class ControlStrategy:
         self.timeout = float(self.config.silence_window)
 
     async def on_line(self, line: str) -> None:
-        if is_error_line(line):
-            self.fail_count += 1
-            logger.warning(
-                "error detected ({}/{}): {}", self.fail_count, self.config.max_failures, line
-            )
-            if self.fail_count >= self.config.max_failures:
-                raise MonitorFatalError("max failures reached")
-        else:
+        if not is_error_line(line):
             self.fail_count = 0
+            return
+        self.fail_count += 1
+        logger.warning(
+            "error detected ({}/{}): {}", self.fail_count, self.config.max_failures, line
+        )
+        if self.fail_count >= self.config.max_failures:
+            raise MonitorFatalError("max failures reached")
 
     async def on_timeout(self) -> None:
         raise MonitorFatalError(f"silence timeout exceeded ({self.config.silence_window}s)")
