@@ -4,7 +4,7 @@ from sys import exit
 from loguru import logger
 
 from monitor.config import Config
-from monitor.controller import MonitorFatalError, controller_loop, startup_grace
+from monitor.controller import Controller, MonitorFatalError, startup_grace
 from monitor.http import make_session
 from monitor.producer import stream_logs
 
@@ -19,7 +19,7 @@ async def main() -> None:
 
         try:
             await startup_grace(stream, config)
-            await controller_loop(stream, config)
+            await Controller(stream, config).run()
         except MonitorFatalError as exc:
             logger.critical("{}", exc)
             exit(1)

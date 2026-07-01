@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import AsyncGenerator
+from dataclasses import dataclass, field
 from typing import NoReturn
 
 from loguru import logger
@@ -46,28 +47,39 @@ async def startup_grace(
     logger.info("startup grace complete")
 
 
-async def controller_loop(
-    stream: AsyncGenerator[str],
-    config: Config,
-) -> NoReturn:
+@dataclass
+class Controller:
     """React to each arriving log line; raise on silence or too many consecutive errors."""
-    fail_count: int = 0
-    logger.info("controller started")
 
-    while True:
-        try:
-            line = await asyncio.wait_for(anext(stream), timeout=config.silence_window)
-        except StopAsyncIteration:
-            raise MonitorFatalError("stream ended unexpectedly") from None
-        except TimeoutError:
-            raise MonitorFatalError(
-                f"silence timeout exceeded ({config.silence_window}s)"
-            ) from None
+    stream: AsyncGenerator[str]
+    config: Config
+    fail_count: int = field(default=0, init=False)
 
-        if is_error_line(line):
-            fail_count += 1
-            logger.warning("error detected ({}/{}): {}", fail_count, config.max_failures, line)
-            if fail_count >= config.max_failures:
-                raise MonitorFatalError("max failures reached")
-        else:
-            fail_count = 0
+    async def run(self) -> NoReturn:
+        """Start the monitoring loop."""
+        logger.info("controller started")
+
+        while True:
+            try:
+                line = await asyncio.wait_for(
+                    anext(self.stream), timeout=self.config.silence_window
+                )
+            except StopAsyncIteration:
+                raise MonitorFatalError("stream ended unexpectedly") from None
+            except TimeoutError:
+                raise MonitorFatalError(
+                    f"silence timeout exceeded ({self.config.silence_window}s)"
+                ) from None
+
+            if is_error_line(line):
+                self.fail_count += 1
+                logger.warning(
+                    "error detected ({}/{}): {}",
+                    self.fail_count,
+                    self.config.max_failures,
+                    line,
+                )
+                if self.fail_count >= self.config.max_failures:
+                    raise MonitorFatalError("max failures reached")
+            else:
+                self.fail_count = 0

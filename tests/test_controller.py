@@ -1,7 +1,7 @@
 import pytest
 
 from monitor.config import Config
-from monitor.controller import MonitorFatalError, controller_loop, startup_grace
+from monitor.controller import Controller, MonitorFatalError, startup_grace
 from monitor.detector import ERROR_PATTERNS
 from tests.helpers import blocking_stream, make_config, make_stream
 
@@ -47,37 +47,31 @@ class TestStartupGrace:
             await startup_grace(make_stream(*lines), cfg)  # type: ignore[arg-type]
 
 
-class TestControllerLoop:
+class TestController:
     async def test_raises_on_silence_timeout(self) -> None:
-        """controller_loop raises when no line arrives within silence_window seconds."""
+        """run() raises when no line arrives within silence_window seconds."""
         with pytest.raises(MonitorFatalError, match="silence timeout"):
-            await controller_loop(blocking_stream(), make_config(silence_window=0))
+            await Controller(blocking_stream(), make_config(silence_window=0)).run()
 
     async def test_raises_when_stream_ends(self) -> None:
-        """controller_loop raises when the async generator is exhausted."""
+        """run() raises when the async generator is exhausted."""
         with pytest.raises(MonitorFatalError, match="stream ended"):
-            await controller_loop(make_stream(), make_config())
+            await Controller(make_stream(), make_config()).run()
 
     async def test_raises_on_max_failures(self) -> None:
-        """controller_loop raises after max_failures consecutive error lines."""
+        """run() raises after max_failures consecutive error lines."""
         with pytest.raises(MonitorFatalError, match="max failures"):
-            await controller_loop(
-                make_stream(*([ERROR_LINE] * 3)),
-                make_config(max_failures=3),
-            )
+            await Controller(make_stream(*([ERROR_LINE] * 3)), make_config(max_failures=3)).run()
 
     async def test_resets_fail_count_on_healthy_line(self) -> None:
         """A healthy line resets the counter; sub-limit bursts never trigger max_failures."""
         with pytest.raises(MonitorFatalError, match="stream ended"):
-            await controller_loop(
+            await Controller(
                 make_stream(ERROR_LINE, ERROR_LINE, HEALTHY_LINE, ERROR_LINE, ERROR_LINE),
                 make_config(max_failures=3),
-            )
+            ).run()
 
     async def test_healthy_lines_do_not_raise(self) -> None:
         """Healthy lines never increment the failure counter."""
         with pytest.raises(MonitorFatalError, match="stream ended"):
-            await controller_loop(
-                make_stream(*([HEALTHY_LINE] * 10)),
-                make_config(max_failures=3),
-            )
+            await Controller(make_stream(*([HEALTHY_LINE] * 10)), make_config(max_failures=3)).run()
