@@ -50,29 +50,24 @@ async def controller_loop(
     stream: AsyncGenerator[str],
     config: Config,
 ) -> NoReturn:
-    """React to each arriving log line; raise on silence or too many consecutive errors.
-
-    Reschedules the silence deadline on every line received. A TimeoutError
-    means no line arrived for silence_window seconds — the container is hung.
-    Error lines increment a counter that resets on any healthy line.
-    """
+    """React to each arriving log line; raise on silence or too many consecutive errors."""
     fail_count: int = 0
     logger.info("controller started")
 
-    try:
-        async with asyncio.timeout(config.silence_window) as cm:
-            async for line in stream:
-                cm.reschedule(asyncio.get_running_loop().time() + config.silence_window)
-                if is_error_line(line):
-                    fail_count += 1
-                    logger.warning(
-                        "error detected ({}/{}): {}", fail_count, config.max_failures, line
-                    )
-                    if fail_count >= config.max_failures:
-                        raise MonitorFatalError("max failures reached")
-                else:
-                    fail_count = 0
-    except TimeoutError:
-        raise MonitorFatalError(f"silence timeout exceeded ({config.silence_window}s)") from None
+    while True:
+        try:
+            line = await asyncio.wait_for(anext(stream), timeout=config.silence_window)
+        except StopAsyncIteration:
+            raise MonitorFatalError("stream ended unexpectedly") from None
+        except TimeoutError:
+            raise MonitorFatalError(
+                f"silence timeout exceeded ({config.silence_window}s)"
+            ) from None
 
-    raise MonitorFatalError("stream ended unexpectedly")
+        if is_error_line(line):
+            fail_count += 1
+            logger.warning("error detected ({}/{}): {}", fail_count, config.max_failures, line)
+            if fail_count >= config.max_failures:
+                raise MonitorFatalError("max failures reached")
+        else:
+            fail_count = 0
