@@ -43,4 +43,28 @@ target-version = "py314"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM"]
+select = [
+    "E",     # pycodestyle errors
+    "F",     # pyflakes
+    "I",     # isort
+    "UP",    # pyupgrade
+    "B",     # flake8-bugbear
+    "SIM",   # flake8-simplify
+    "ASYNC", # flake8-async
+    "C4",    # flake8-comprehensions
+    "DTZ",   # flake8-datetimez
+    "ERA",   # eradicate (no commented-out code)
+    "N",     # pep8-naming
+    "PERF",  # perflint
+    "PIE",   # flake8-pie
+    "PT",    # flake8-pytest-style
+    "PTH",   # flake8-use-pathlib
+    "RET",   # flake8-return
+    "RSE",   # flake8-raise
+    "RUF",   # ruff-specific rules
+    "T20",   # flake8-print (no print statements)
+    "TRY",   # tryceratops
+]
+ignore = [
+    "TRY003", # long exception messages at raise sites — intentional for clarity
+]

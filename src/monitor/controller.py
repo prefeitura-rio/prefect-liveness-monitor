@@ -71,10 +71,13 @@ class ControlStrategy:
         if not is_error_line(line):
             self.fail_count = 0
             return
+
         self.fail_count += 1
+
         logger.warning(
             "error detected ({}/{}): {}", self.fail_count, self.config.max_failures, line
         )
+
         if self.fail_count >= self.config.max_failures:
             raise MonitorFatalError("max failures reached")
 
