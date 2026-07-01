@@ -17,7 +17,7 @@ class TestMain:
         monkeypatch.setattr("main.Config", MagicMock(return_value=make_config()))
         monkeypatch.setattr("main.make_session", MagicMock(return_value=AsyncMock()))
         monkeypatch.setattr("main.stream_logs", MagicMock(return_value=make_stream()))
-        monkeypatch.setattr("main.startup_grace", AsyncMock())
+        monkeypatch.setattr("monitor.controller.Controller.startup_grace", AsyncMock())
         monkeypatch.setattr("monitor.controller.Controller.run", raise_fatal)
 
         with pytest.raises(SystemExit) as exc_info:

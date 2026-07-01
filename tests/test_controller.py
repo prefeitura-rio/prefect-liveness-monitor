@@ -1,7 +1,7 @@
 import pytest
 
 from monitor.config import Config
-from monitor.controller import Controller, MonitorFatalError, startup_grace
+from monitor.controller import Controller, MonitorFatalError
 from monitor.detector import ERROR_PATTERNS
 from tests.helpers import blocking_stream, make_config, make_stream
 
@@ -12,19 +12,19 @@ HEALTHY_LINE = "12:00:00 | INFO | prefect.server.scheduler - scheduled 0 runs"
 class TestStartupGrace:
     async def test_returns_normally_when_grace_expires(self) -> None:
         """startup_grace returns without error when the timeout fires with no lines."""
-        await startup_grace(blocking_stream(), make_config(startup_grace_seconds=0))
+        await Controller(blocking_stream(), make_config(startup_grace_seconds=0)).startup_grace()
 
     async def test_ignores_silence_within_deadline(self) -> None:
         """An empty stream does not raise — silence is tolerated during grace."""
-        await startup_grace(make_stream(), make_config(startup_grace_seconds=60))
+        await Controller(make_stream(), make_config(startup_grace_seconds=60)).startup_grace()
 
     async def test_cumulative_fail_count_not_reset_by_healthy_line(self) -> None:
         """Healthy lines do not reset the error counter during grace; counting is cumulative."""
         with pytest.raises(MonitorFatalError, match="max failures"):
-            await startup_grace(
+            await Controller(
                 make_stream(ERROR_LINE, HEALTHY_LINE, ERROR_LINE),
                 make_config(max_failures=2, startup_grace_seconds=60),
-            )
+            ).startup_grace()
 
     @pytest.mark.parametrize(
         ("lines", "cfg", "match"),
@@ -44,7 +44,7 @@ class TestStartupGrace:
     ) -> None:
         """startup_grace raises MonitorFatalError when cumulative errors reach max_failures."""
         with pytest.raises(MonitorFatalError, match=match):
-            await startup_grace(make_stream(*lines), cfg)  # type: ignore[arg-type]
+            await Controller(make_stream(*lines), cfg).startup_grace()  # type: ignore[arg-type]
 
 
 class TestController:

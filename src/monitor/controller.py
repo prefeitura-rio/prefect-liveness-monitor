@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import AsyncGenerator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import NoReturn
 
 from loguru import logger
@@ -17,46 +17,36 @@ class MonitorFatalError(Exception):
     """
 
 
-async def startup_grace(
-    stream: AsyncGenerator[str],
-    config: Config,
-) -> None:
-    """Drain the stream for startup_grace_seconds, enforcing errors but not silence.
-
-    The container may not emit logs immediately after boot. This grace period
-    tolerates silence while still catching fatal error patterns.
-
-    Unlike controller_loop, error counting here is cumulative: healthy lines
-    do not reset the failure counter. Any max_failures errors during the grace
-    period — even non-consecutive — trigger a fatal restart.
-    """
-    fail_count: int = 0
-    logger.info("startup grace started ({} seconds)", config.startup_grace_seconds)
-
-    try:
-        async with asyncio.timeout(config.startup_grace_seconds):
-            async for line in stream:
-                if is_error_line(line):
-                    fail_count += 1
-                    logger.warning("error during grace ({}/{})", fail_count, config.max_failures)
-                    if fail_count >= config.max_failures:
-                        raise MonitorFatalError("max failures reached during startup grace")
-    except TimeoutError:
-        pass  # grace period expired normally — silence during startup is expected
-
-    logger.info("startup grace complete")
-
-
 @dataclass
 class Controller:
-    """React to each arriving log line; raise on silence or too many consecutive errors."""
+    """Monitor a log stream through two sequential phases: grace then control."""
 
     stream: AsyncGenerator[str]
     config: Config
-    fail_count: int = field(default=0, init=False)
+
+    async def startup_grace(self) -> None:
+        """Cumulative error counting with silence tolerated; returns when the deadline expires."""
+        fail_count = 0
+        logger.info("startup grace started ({} seconds)", self.config.startup_grace_seconds)
+
+        try:
+            async with asyncio.timeout(self.config.startup_grace_seconds):
+                async for line in self.stream:
+                    if is_error_line(line):
+                        fail_count += 1
+                        logger.warning(
+                            "error during grace ({}/{})", fail_count, self.config.max_failures
+                        )
+                        if fail_count >= self.config.max_failures:
+                            raise MonitorFatalError("max failures reached during startup grace")
+        except TimeoutError:
+            pass
+
+        logger.info("startup grace complete")
 
     async def run(self) -> NoReturn:
-        """Start the monitoring loop."""
+        """Consecutive error counting with silence fatal; never returns normally."""
+        fail_count = 0
         logger.info("controller started")
 
         while True:
@@ -72,14 +62,11 @@ class Controller:
                 ) from None
 
             if is_error_line(line):
-                self.fail_count += 1
+                fail_count += 1
                 logger.warning(
-                    "error detected ({}/{}): {}",
-                    self.fail_count,
-                    self.config.max_failures,
-                    line,
+                    "error detected ({}/{}): {}", fail_count, self.config.max_failures, line
                 )
-                if self.fail_count >= self.config.max_failures:
+                if fail_count >= self.config.max_failures:
                     raise MonitorFatalError("max failures reached")
             else:
-                self.fail_count = 0
+                fail_count = 0
